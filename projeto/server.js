@@ -2,8 +2,13 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import Amadeus from 'amadeus';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 
 dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const app = express();
 app.use(cors());
@@ -37,7 +42,6 @@ function addDays(dateStr, days) {
   return d.toISOString().split('T')[0];
 }
 
-// Filtra por horário de partida
 function filterByTime(results, depTimeFrom, depTimeTo, retTimeFrom, retTimeTo) {
   return results.filter(flight => {
     if (depTimeFrom && depTimeTo) {
@@ -58,15 +62,11 @@ function filterByTime(results, depTimeFrom, depTimeTo, retTimeFrom, retTimeTo) {
   });
 }
 
-// Filtra por número máximo de paradas
 function filterByStops(results, maxStops) {
   if (maxStops === undefined || maxStops === null || maxStops >= 99) return results;
-  return results.filter(flight => {
-    return flight.itineraries.every(it => {
-      const stops = it.segments.length - 1; // segmentos - 1 = paradas
-      return stops <= maxStops;
-    });
-  });
+  return results.filter(flight =>
+    flight.itineraries.every(it => (it.segments.length - 1) <= maxStops)
+  );
 }
 
 async function searchFlight(origin, destination, departureDate, returnDate, adults = 1, travelClass = 'ECONOMY') {
@@ -109,15 +109,10 @@ async function searchFlight(origin, destination, departureDate, returnDate, adul
   }
 }
 
-// ─── Rotas ───────────────────────────────────────────────────────────────────
+// ─── Rotas API ────────────────────────────────────────────────────────────────
 
-// Busca por data específica
 app.post('/api/search/specific', async (req, res) => {
-  const {
-    origin, destination, departureDate, returnDate,
-    adults, travelClass, maxStops,
-    depTimeFrom, depTimeTo, retTimeFrom, retTimeTo,
-  } = req.body;
+  const { origin, destination, departureDate, returnDate, adults, travelClass, maxStops, depTimeFrom, depTimeTo, retTimeFrom, retTimeTo } = req.body;
   try {
     let results = await searchFlight(origin, destination, departureDate, returnDate, adults, travelClass);
     results = filterByStops(results, maxStops);
@@ -128,13 +123,8 @@ app.post('/api/search/specific', async (req, res) => {
   }
 });
 
-// Busca por dia da semana
 app.post('/api/search/weekday', async (req, res) => {
-  const {
-    origin, destination, departureDayOfWeek, returnDayOfWeek,
-    startDate, endDate, adults, travelClass, maxStops,
-    depTimeFrom, depTimeTo, retTimeFrom, retTimeTo,
-  } = req.body;
+  const { origin, destination, departureDayOfWeek, returnDayOfWeek, startDate, endDate, adults, travelClass, maxStops, depTimeFrom, depTimeTo, retTimeFrom, retTimeTo } = req.body;
   try {
     const allDates = getDateRange(startDate, endDate);
     const departureDates = allDates.filter(d => getDayOfWeek(d) === parseInt(departureDayOfWeek));
@@ -146,13 +136,9 @@ app.post('/api/search/weekday', async (req, res) => {
       if (returnDayOfWeek !== undefined && returnDayOfWeek !== null) {
         for (let i = 1; i <= 14; i++) {
           const candidate = addDays(depDate, i);
-          if (getDayOfWeek(candidate) === parseInt(returnDayOfWeek)) {
-            retDate = candidate;
-            break;
-          }
+          if (getDayOfWeek(candidate) === parseInt(returnDayOfWeek)) { retDate = candidate; break; }
         }
       }
-
       let flights = await searchFlight(origin, destination, depDate, retDate, adults, travelClass);
       flights = filterByStops(flights, maxStops);
       flights = filterByTime(flights, depTimeFrom, depTimeTo, retTimeFrom, retTimeTo);
@@ -167,13 +153,8 @@ app.post('/api/search/weekday', async (req, res) => {
   }
 });
 
-// Busca por duração
 app.post('/api/search/flexible', async (req, res) => {
-  const {
-    origin, destination, tripDurationDays,
-    startDate, endDate, adults, travelClass, maxStops,
-    depTimeFrom, depTimeTo, retTimeFrom, retTimeTo,
-  } = req.body;
+  const { origin, destination, tripDurationDays, startDate, endDate, adults, travelClass, maxStops, depTimeFrom, depTimeTo, retTimeFrom, retTimeTo } = req.body;
   try {
     const allDates = getDateRange(startDate, endDate);
     const sampledDates = allDates.filter((_, i) => i % 3 === 0);
@@ -183,7 +164,6 @@ app.post('/api/search/flexible', async (req, res) => {
     for (const depDate of limitedDates) {
       const retDate = addDays(depDate, parseInt(tripDurationDays));
       if (retDate > endDate) break;
-
       let flights = await searchFlight(origin, destination, depDate, retDate, adults, travelClass);
       flights = filterByStops(flights, maxStops);
       flights = filterByTime(flights, depTimeFrom, depTimeTo, retTimeFrom, retTimeTo);
@@ -198,55 +178,52 @@ app.post('/api/search/flexible', async (req, res) => {
   }
 });
 
-// Busca de aeroportos
 app.get('/api/airports', async (req, res) => {
   const { keyword } = req.query;
   try {
     let results = [];
     try {
       const brResponse = await amadeus.referenceData.locations.get({
-        keyword,
-        subType: 'AIRPORT,CITY',
-        countryCode: 'BR',
-        'page[limit]': 8,
+        keyword, subType: 'AIRPORT,CITY', countryCode: 'BR', 'page[limit]': 8,
       });
       results = brResponse.data || [];
     } catch (e) {}
 
     if (results.length === 0) {
       const globalResponse = await amadeus.referenceData.locations.get({
-        keyword,
-        subType: 'AIRPORT,CITY',
-        'page[limit]': 8,
+        keyword, subType: 'AIRPORT,CITY', 'page[limit]': 8,
       });
       results = globalResponse.data || [];
     }
 
-    const airports = results.map(loc => ({
-      iataCode: loc.iataCode,
-      name: loc.name,
-      cityName: loc.address?.cityName,
-      countryName: loc.address?.countryName,
+    res.json({ airports: results.map(loc => ({
+      iataCode: loc.iataCode, name: loc.name,
+      cityName: loc.address?.cityName, countryName: loc.address?.countryName,
       countryCode: loc.address?.countryCode,
-    }));
-
-    res.json({ airports });
+    }))});
   } catch (e) {
     res.json({ airports: [] });
   }
 });
 
-// Monitoramento
 app.post('/api/monitor/check', async (req, res) => {
   const { origin, destination, departureDate, returnDate, adults, travelClass } = req.body;
   try {
     const results = await searchFlight(origin, destination, departureDate, returnDate, adults, travelClass);
-    const bestPrice = results.length > 0 ? results[0].price : null;
-    res.json({ price: bestPrice, flight: results[0] || null, checkedAt: new Date().toISOString() });
+    res.json({ price: results[0]?.price || null, flight: results[0] || null, checkedAt: new Date().toISOString() });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
+
+// ─── Serve frontend React em produção ────────────────────────────────────────
+if (process.env.NODE_ENV === 'production') {
+  const distPath = join(__dirname, 'dist');
+  app.use(express.static(distPath));
+  app.get('*', (req, res) => {
+    res.sendFile(join(distPath, 'index.html'));
+  });
+}
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✈️  Server running on http://localhost:${PORT}`));
